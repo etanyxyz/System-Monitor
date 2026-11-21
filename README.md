@@ -5,15 +5,19 @@ Containerized resource monitor with a live web dashboard:
 - **Host RAM usage** — total/used/free/available/swap (from `/proc/meminfo`)
 - **CPU usage across threads** — per-core/per-hardware-thread utilization (from `/proc/stat`)
 - **Docker containers** — inventory, state, status, health, live CPU % and memory
-- **Web dashboard** — served at `http://localhost:8080`
+- **Web dashboard** — served at `http://localhost:1010`
 
 ## Quickstart
+
+The repo ships a hardened `docker-compose.yml` (monitor + read-only
+socket-proxy) and a `Dockerfile`; the image is built from source on first
+run:
 
 ```bash
 docker compose up --build
 ```
 
-Open <http://localhost:8080>.
+Open <http://localhost:1010>.
 
 ### Dashboard
 
@@ -63,12 +67,12 @@ your Docker daemon or host:
 | Read-only filesystems | Both containers run with `read_only: true` (tmpfs only for scratch). |
 | No capabilities | `cap_drop: ALL` + `no-new-privileges` on both containers. |
 | Pinned images | Base images are pinned by digest; Python deps are pinned exactly in `requirements.txt`. |
-| Optional auth | Set `MONITOR_TOKEN=<secret>` for the monitor service to require a token on every request (API, WebSocket, static files). Open the dashboard as `http://host:8080/?token=<secret>`. Off by default. |
+| Optional auth | Set `MONITOR_TOKEN=<secret>` for the monitor service to require a token on every request (API, WebSocket, static files). Open the dashboard as `http://host:1010/?token=<secret>`. Off by default. |
 
 Notes:
 
-- The dashboard port is published on all interfaces. If you only use it on
-  the host, change the compose port to `127.0.0.1:8080:8080`.
+- The dashboard port (`1010`) is published on all interfaces. If you only
+  use it on the host, change the compose port to `127.0.0.1:1010:1010`.
 - The proxy container is trusted (it holds the socket), so keep it
   digest-pinned as shipped and don't expose its port 2375.
 

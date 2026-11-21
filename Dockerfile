@@ -18,6 +18,6 @@ COPY --chown=monitor:monitor static ./static
 
 USER monitor
 
-EXPOSE 8080
+EXPOSE 1010
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1010"]

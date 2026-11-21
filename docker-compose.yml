@@ -3,13 +3,13 @@ services:
     build: .
     container_name: resource-monitor
     ports:
-      - "8080:8080"
+      - "1010:1010"
     environment:
       # Talk to the Docker daemon through the read-only proxy below — the
       # host socket itself is never mounted into this container.
       - DOCKER_HOST=tcp://socket-proxy:2375
       # Optional: require this token on every request (API, WS, static).
-      # When set, open the dashboard as http://host:8080/?token=<same value>.
+      # When set, open the dashboard as http://host:1010/?token=<same value>.
       # - MONITOR_TOKEN=change-me
     depends_on:
       - socket-proxy

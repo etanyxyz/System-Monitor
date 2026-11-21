@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 
 // Optional auth: when MONITOR_TOKEN is set server-side, open the page as
-// http://host:8080/?token=... and the token is attached to every fetch and
+// http://host:1010/?token=... and the token is attached to every fetch and
 // the WebSocket URL (JS can't set headers on WebSocket handshakes).
 const urlToken = new URLSearchParams(location.search).get("token");
 function withToken(path) {

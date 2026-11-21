@@ -24,7 +24,7 @@ app = FastAPI(title="Resource Monitor", version="0.1.0")
 
 # Optional shared-secret auth. Set MONITOR_TOKEN in the environment to
 # require a token on every request; the dashboard is then opened as
-# http://host:8080/?token=<MONITOR_TOKEN> (the frontend attaches it to
+# http://host:1010/?token=<MONITOR_TOKEN> (the frontend attaches it to
 # fetches and the WebSocket URL, where headers can't be set from JS).
 MONITOR_TOKEN = os.environ.get("MONITOR_TOKEN", "").strip()
 
