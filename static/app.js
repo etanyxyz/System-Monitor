@@ -2,6 +2,15 @@
 
 const $ = (id) => document.getElementById(id);
 
+// Optional auth: when MONITOR_TOKEN is set server-side, open the page as
+// http://host:8080/?token=... and the token is attached to every fetch and
+// the WebSocket URL (JS can't set headers on WebSocket handshakes).
+const urlToken = new URLSearchParams(location.search).get("token");
+function withToken(path) {
+  if (!urlToken) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(urlToken)}`;
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -400,8 +409,8 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     try {
       const [s, c] = await Promise.all([
-        fetch("/api/system").then((r) => r.json()),
-        fetch("/api/containers").then((r) => (r.ok ? r.json() : { error: "HTTP " + r.status })),
+        fetch(withToken("/api/system")).then((r) => r.json()),
+        fetch(withToken("/api/containers")).then((r) => (r.ok ? r.json() : { error: "HTTP " + r.status })),
       ]);
       onSnapshot({ system: s, containers: c });
     } catch (e) {
@@ -417,7 +426,9 @@ function stopPolling() {
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  let wsUrl = `${proto}://${location.host}/ws`;
+  if (urlToken) wsUrl += `?token=${encodeURIComponent(urlToken)}`;
+  const ws = new WebSocket(wsUrl);
   ws.onopen = () => {
     wsFails = 0;
     stopPolling();

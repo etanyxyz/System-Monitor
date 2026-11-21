@@ -8,16 +8,40 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
+from starlette.responses import Response
 
 from . import docker_stats, system_metrics
 
 app = FastAPI(title="Resource Monitor", version="0.1.0")
+
+# Optional shared-secret auth. Set MONITOR_TOKEN in the environment to
+# require a token on every request; the dashboard is then opened as
+# http://host:8080/?token=<MONITOR_TOKEN> (the frontend attaches it to
+# fetches and the WebSocket URL, where headers can't be set from JS).
+MONITOR_TOKEN = os.environ.get("MONITOR_TOKEN", "").strip()
+
+
+def _authorized(headers, query_params) -> bool:
+    """Check the bearer token / ?token= query parameter (constant-time)."""
+    if not MONITOR_TOKEN:
+        return True
+    token = str(query_params.get("token", ""))
+    if token and secrets.compare_digest(token, MONITOR_TOKEN):
+        return True
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        bearer = auth.split(None, 1)[1].strip()
+        if bearer and secrets.compare_digest(bearer, MONITOR_TOKEN):
+            return True
+    return False
 
 
 @app.middleware("http")
@@ -31,6 +55,14 @@ async def no_cache_static(request: Request, call_next):
     if not request.url.path.startswith(("/api", "/ws")):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """Optional bearer-token auth for all HTTP routes (API + static)."""
+    if MONITOR_TOKEN and not _authorized(request.headers, request.query_params):
+        return JSONResponse({"error": "unauthorized: missing or bad token"}, status_code=401)
+    return await call_next(request)
 
 PUSH_INTERVAL = 1.5  # seconds between websocket pushes
 CONTAINER_REFRESH_EVERY = 4  # container stats are slower; refresh every Nth push
@@ -56,6 +88,14 @@ def api_containers():
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     """Push a full snapshot; container stats every CONTAINER_REFRESH_EVERY push."""
+    if MONITOR_TOKEN and not _authorized(websocket.headers, websocket.query_params):
+        # Reject the handshake itself with HTTP 401 (no data ever flows).
+        # send_denial_response is the starlette >=1 API; it wraps the
+        # response so uvicorn emits a real HTTP reply to the upgrade.
+        await websocket.send_denial_response(
+            Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
+        )
+        return
     await websocket.accept()
     tick = 0
     try:

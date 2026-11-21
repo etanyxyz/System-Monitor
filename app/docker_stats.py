@@ -7,7 +7,7 @@ returns {"error": msg} instead of raising.
 
 from __future__ import annotations
 
-import time
+from concurrent.futures import ThreadPoolExecutor
 
 import docker
 from docker.errors import DockerException
@@ -15,10 +15,12 @@ from docker.errors import DockerException
 _client: docker.DockerClient | None = None
 _image_tags: dict[str, str] = {}
 
-# How long to sample a container's stats for, and how many running
-# containers to sample per pass (each sample costs two daemon round trips).
-_SAMPLE_INTERVAL = 0.5
+# How many running containers to sample per pass, and how many stats
+# calls to run at once. A single non-streaming stats call takes ~1s on
+# the daemon (its own internal sampling window) but already includes
+# both precpu_stats and cpu_stats, so one call per container suffices.
 _MAX_SAMPLED = 25
+_MAX_WORKERS = 8
 
 
 def _get_client() -> docker.DockerClient:
@@ -38,18 +40,22 @@ def _get_client() -> docker.DockerClient:
         raise ConnectionError(f"cannot reach Docker daemon: {exc}") from exc
 
 
-def _cpu_percent_from_stats(before: dict, after: dict) -> float:
-    """Container CPU utilization (%) between two /stats snapshots."""
+def _cpu_percent_from_stats(stats: dict) -> float:
+    """Container CPU utilization (%) from one non-streaming stats message.
+
+    The daemon samples for ~1s internally and returns both the before
+    (precpu_stats) and after (cpu_stats) snapshots, so a single call is
+    enough for a meaningful short-window CPU %.
+    """
     try:
+        after = stats["cpu_stats"]
+        before = stats.get("precpu_stats", {})
         cpu_delta = (
-            after["cpu_stats"]["cpu_usage"]["total_usage"]
-            - before["cpu_stats"]["cpu_usage"]["total_usage"]
+            after["cpu_usage"]["total_usage"]
+            - before.get("cpu_usage", {}).get("total_usage", 0)
         )
-        sys_delta = (
-            after["cpu_stats"]["system_cpu_usage"]
-            - before["cpu_stats"]["system_cpu_usage"]
-        )
-        per_cpu = after["cpu_stats"]["cpu_usage"].get("per_cpu_usage") or []
+        sys_delta = after["system_cpu_usage"] - before.get("system_cpu_usage", 0)
+        per_cpu = after["cpu_usage"].get("per_cpu_usage") or []
         cores = len(per_cpu) or 1
         if cpu_delta <= 0 or sys_delta <= 0:
             return 0.0
@@ -112,21 +118,30 @@ def get_containers() -> dict:
         }
         result.append(entry)
 
-    running = [c for c in containers if c.status.lower().startswith("running")]
-    for c in running[:_MAX_SAMPLED]:
+    running = [c for c in containers if c.status.lower().startswith("running")][
+        :_MAX_SAMPLED
+    ]
+
+    def _fetch_stats(c):
         try:
-            before = c.stats(stream=False)
-            time.sleep(_SAMPLE_INTERVAL)
-            after = c.stats(stream=False)
+            return c.short_id, c.stats(stream=False)
         except DockerException:
-            continue
-        entry = next((r for r in result if r["id"] == c.short_id), None)
-        if entry is None:
-            continue
-        entry["cpu_percent"] = round(_cpu_percent_from_stats(before, after), 1)
-        usage, limit = _memory_from_stats(after)
-        entry["memory_usage_bytes"] = usage
-        entry["memory_limit_bytes"] = limit
-        entry["memory_percent"] = round(usage / limit * 100, 1) if limit > 0 else None
+            return c.short_id, None
+
+    # Each stats call takes ~1s on the daemon, so run them concurrently;
+    # a pass is ~1s total instead of ~1s per container.
+    if running:
+        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(running))) as pool:
+            for cid, stats in pool.map(_fetch_stats, running):
+                entry = next((r for r in result if r["id"] == cid), None)
+                if entry is None or stats is None:
+                    continue
+                entry["cpu_percent"] = round(_cpu_percent_from_stats(stats), 1)
+                usage, limit = _memory_from_stats(stats)
+                entry["memory_usage_bytes"] = usage
+                entry["memory_limit_bytes"] = limit
+                entry["memory_percent"] = (
+                    round(usage / limit * 100, 1) if limit > 0 else None
+                )
 
     return {"containers": result}

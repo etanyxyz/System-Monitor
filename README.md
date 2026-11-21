@@ -36,8 +36,11 @@ The monitor is a single Docker container running FastAPI + Uvicorn:
 
 - Host CPU/RAM are read from `/proc/stat` and `/proc/meminfo`. These files
   are host-wide, so no privileged mode or extra mounts are needed.
-- Docker container data comes from the Engine API via the mounted
-  `/var/run/docker.sock` (same approach as Portainer).
+- Docker container data comes from the Engine API through a **read-only
+  socket proxy** (`lscr.io/linuxserver/socket-proxy`) that fronts
+  `/var/run/docker.sock`. The monitor container itself never sees the
+  socket — it connects to `tcp://socket-proxy:2375`, which only allows
+  `GET /_ping`, `/version`, `/containers/*` and `/images/*` (see Security).
 
 ### API
 
@@ -47,16 +50,34 @@ The monitor is a single Docker container running FastAPI + Uvicorn:
 | `GET /api/containers` | Container list with state, status, health, live CPU % and memory |
 | `WS /ws` | Pushes a snapshot every ~1.5 s (containers refreshed every ~6 s) |
 
-## Permissions
+## Security
 
-Mounting `/var/run/docker.sock` grants the container **full access to the
-Docker daemon** (it can inspect, start, and stop containers). Only run this
-on hosts you trust. The container runs as root so it can read the socket,
-whose group GID varies per host.
+The compose stack is hardened so a compromise of the dashboard can't touch
+your Docker daemon or host:
+
+| Control | Detail |
+|---|---|
+| Read-only Docker access | The app reaches the daemon only through the `socket-proxy` container with `POST=0` (GET/HEAD only) and just `PING`, `VERSION`, `CONTAINERS`, `IMAGES` enabled. It can list containers and read stats — it **cannot** create, start, stop, kill, delete, exec, build, or otherwise mutate anything. |
+| No socket in the app | `/var/run/docker.sock` is mounted (read-only) only into `socket-proxy`, never into the monitor. The monitor talks to it over the compose network at `tcp://socket-proxy:2375`, and the proxy port is not published. |
+| Non-root process | The monitor runs as the unprivileged `monitor` user. |
+| Read-only filesystems | Both containers run with `read_only: true` (tmpfs only for scratch). |
+| No capabilities | `cap_drop: ALL` + `no-new-privileges` on both containers. |
+| Pinned images | Base images are pinned by digest; Python deps are pinned exactly in `requirements.txt`. |
+| Optional auth | Set `MONITOR_TOKEN=<secret>` for the monitor service to require a token on every request (API, WebSocket, static files). Open the dashboard as `http://host:8080/?token=<secret>`. Off by default. |
+
+Notes:
+
+- The dashboard port is published on all interfaces. If you only use it on
+  the host, change the compose port to `127.0.0.1:8080:8080`.
+- The proxy container is trusted (it holds the socket), so keep it
+  digest-pinned as shipped and don't expose its port 2375.
 
 ## Troubleshooting
 
-- **`/api/containers` returns 503** — the socket is missing or not readable.
-  Check the compose volume mount and that `docker` works on the host.
+- **`/api/containers` returns 503** — the proxy can't reach the daemon or
+  the endpoint it needs. Check `docker logs docker-socket-proxy`, that
+  `docker` works on the host, and that the socket mount is present.
+- **`/` or `/api/*` returns 401** — `MONITOR_TOKEN` is set; open the page
+  with `?token=<secret>` in the URL (and use the same token in API calls).
 - **CPU numbers look low** — per-core utilization is sampled between pushes;
   idle hosts report near-zero values by design.
