@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import docker
 from docker.errors import DockerException
+from requests.exceptions import RequestException
 
 _client: docker.DockerClient | None = None
 _image_tags: dict[str, str] = {}
@@ -32,13 +33,17 @@ def _get_client() -> docker.DockerClient:
         try:
             _client.ping()
             return _client
-        except DockerException:
+        # docker-py leaks connection-level failures as
+        # requests.exceptions.ConnectionError (not a DockerException),
+        # so catch request errors too — otherwise a dead daemon strands
+        # a stale client here and every call below raises uncaught.
+        except (DockerException, RequestException, OSError):
             _client = None
     try:
         _client = docker.from_env()  # honors DOCKER_HOST, else unix socket
         _client.ping()
         return _client
-    except (DockerException, OSError) as exc:
+    except (DockerException, RequestException, OSError) as exc:
         raise ConnectionError(f"cannot reach Docker daemon: {exc}") from exc
 
 
@@ -113,7 +118,9 @@ def get_containers() -> dict:
         # the human-readable Status, Ports and Command strings that the
         # inspect responses (behind containers.list) don't carry.
         ps_rows = {r["Id"]: r for r in client.api.containers(all=True)}
-    except (ConnectionError, DockerException) as exc:
+    except (ConnectionError, DockerException, RequestException) as exc:
+        # covers a daemon that dies mid-pass (requests-level errors) as
+        # well as the ConnectionError raised by _get_client()
         return {"error": str(exc)}
 
     def image_tag(ref: str | None) -> str | None:

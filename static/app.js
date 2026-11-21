@@ -337,19 +337,21 @@ function rowHtml(c) {
       + (c.memory_percent != null ? ` (${c.memory_percent}%)` : "");
   }
   const labels = Object.entries(c.labels || {}).map(([k, v]) => `${k}=${v}`);
-  const cmd = c.command ? `"${trunc(c.command, 36)}"` : "—";
+  // truncation widths match the CSS max-widths (minus padding) so the
+  // table fits common viewports without hiding the live CPU/memory
+  const cmd = c.command ? `"${trunc(c.command, 22)}"` : "—";
   const ports = c.ports || "—";
   // docker ps: health is already part of the Status string
   // ("Up 3 hours (healthy)"), so no separate badge
   return `<tr>
     <td class="id">${esc(c.id)}</td>
-    <td class="image" title="${esc(c.image || "")}">${esc(trunc(c.image || "—", 26))}</td>
+    <td class="image" title="${esc(c.image || "")}">${esc(trunc(c.image || "—", 16))}</td>
     <td class="cmd" title="${esc(c.command || "")}">${esc(cmd)}</td>
     <td class="dim" title="${esc(c.created || "")}">${esc(timeAgo(c.created))}</td>
-    <td><span class="badge ${stateCls}">${esc(c.status || c.state || "unknown")}</span></td>
-    <td class="ports" title="${esc(c.ports || "")}">${esc(trunc(ports, 28))}</td>
-    <td class="name">${esc(c.name)}</td>
-    <td class="labels" title="${esc(labels.join(", "))}">${esc(trunc(labels.join(", "), 28))}</td>
+    <td class="status" title="${esc(c.status || c.state || "unknown")}"><span class="badge ${stateCls}">${esc(c.status || c.state || "unknown")}</span></td>
+    <td class="ports" title="${esc(c.ports || "")}">${esc(trunc(ports, 20))}</td>
+    <td class="name" title="${esc(c.name || "")}">${esc(trunc(c.name || "—", 19))}</td>
+    <td class="labels" title="${esc(labels.join(", "))}">${esc(trunc(labels.join(", "), 17))}</td>
     <td>${c.cpu_percent != null ? c.cpu_percent + "%" : "—"}</td>
     <td>${mem}</td>
   </tr>`;

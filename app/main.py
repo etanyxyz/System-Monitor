@@ -103,7 +103,12 @@ async def ws(websocket: WebSocket):
             system = await asyncio.to_thread(system_metrics.get_system)
             payload: dict = {"system": system}
             if tick % CONTAINER_REFRESH_EVERY == 0:
-                containers = await asyncio.to_thread(docker_stats.get_containers)
+                try:
+                    containers = await asyncio.to_thread(docker_stats.get_containers)
+                except Exception as exc:
+                    # Never kill the live feed over a stats error: report
+                    # the failure in the payload and keep pushing.
+                    containers = {"error": str(exc)}
                 payload["containers"] = containers
             await websocket.send_text(json.dumps(payload))
             tick += 1
