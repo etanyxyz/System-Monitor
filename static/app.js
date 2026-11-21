@@ -59,6 +59,26 @@ function timeLabel(t) {
   return new Date(t).toLocaleTimeString([], { hour12: false });
 }
 
+// docker-style relative time: "37 seconds ago", "5 minutes ago", ...
+function timeAgo(iso) {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return String(iso);
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec} second${sec === 1 ? "" : "s"} ago`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"} ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? "" : "s"} ago`;
+}
+
+function trunc(s, n) {
+  s = String(s ?? "");
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
 // ---------------------------------------------------------------------------
 // charts
 // ---------------------------------------------------------------------------
@@ -304,24 +324,32 @@ const STATE_CLASS = {
 };
 
 function rowHtml(c) {
-  const stateCls =
+  let stateCls =
     c.state === "exited"
       ? c.exit_code === 0 ? "muted" : "bad"
       : STATE_CLASS[c.state] || "muted";
-  const healthCls =
-    c.health === "healthy" ? "ok" : c.health === "unhealthy" ? "bad" : "warn";
+  if (c.health === "unhealthy") stateCls = "bad";
+  else if (c.health === "starting") stateCls = "warn";
   let mem = "—";
   if (c.memory_usage_bytes != null) {
     mem = humanBytes(c.memory_usage_bytes)
       + (c.memory_limit_bytes ? " / " + humanBytes(c.memory_limit_bytes) : "")
       + (c.memory_percent != null ? ` (${c.memory_percent}%)` : "");
   }
+  const labels = Object.entries(c.labels || {}).map(([k, v]) => `${k}=${v}`);
+  const cmd = c.command ? `"${trunc(c.command, 36)}"` : "—";
+  const ports = c.ports || "—";
+  // docker ps: health is already part of the Status string
+  // ("Up 3 hours (healthy)"), so no separate badge
   return `<tr>
+    <td class="id">${esc(c.id)}</td>
+    <td class="image" title="${esc(c.image || "")}">${esc(trunc(c.image || "—", 26))}</td>
+    <td class="cmd" title="${esc(c.command || "")}">${esc(cmd)}</td>
+    <td class="dim" title="${esc(c.created || "")}">${esc(timeAgo(c.created))}</td>
+    <td><span class="badge ${stateCls}">${esc(c.status || c.state || "unknown")}</span></td>
+    <td class="ports" title="${esc(c.ports || "")}">${esc(trunc(ports, 28))}</td>
     <td class="name">${esc(c.name)}</td>
-    <td class="image">${esc(c.image || "—")}</td>
-    <td><span class="badge ${stateCls}">${esc(c.state || "unknown")}</span></td>
-    <td>${c.health ? `<span class="badge ${healthCls}">${esc(c.health)}</span>` : "—"}</td>
-    <td class="dim">${esc(c.status)}</td>
+    <td class="labels" title="${esc(labels.join(", "))}">${esc(trunc(labels.join(", "), 28))}</td>
     <td>${c.cpu_percent != null ? c.cpu_percent + "%" : "—"}</td>
     <td>${mem}</td>
   </tr>`;
@@ -339,7 +367,8 @@ function updateTable(payload) {
   const list = payload.containers;
   $("container-count").textContent =
     list.length + (list.length === 1 ? " container" : " containers");
-  $("containers-table").tbody.innerHTML = list.map(rowHtml).join("");
+  // Note: the table API is tBodies[0]; there is no `table.tbody` accessor.
+  $("containers-table").tBodies[0].innerHTML = list.map(rowHtml).join("");
 }
 
 // keep at most `max` points (uniform stride, always include the newest)

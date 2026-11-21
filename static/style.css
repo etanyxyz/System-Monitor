@@ -144,8 +144,14 @@ td {
 
 tbody tr:hover td { background: rgba(88, 166, 255, .05); }
 
+.table-scroll { overflow-x: auto; }
+
 td.name { font-weight: 500; }
-td.image, td.dim { color: var(--muted); font-family: ui-monospace, monospace; font-size: .82rem; }
+td.id, td.image, td.cmd, td.ports, td.labels, td.dim {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: .82rem;
+}
 
 .badge {
   padding: 2px 9px;

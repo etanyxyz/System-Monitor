@@ -4,7 +4,7 @@ Containerized resource monitor with a live web dashboard:
 
 - **Host RAM usage** — total/used/free/available/swap (from `/proc/meminfo`)
 - **CPU usage across threads** — per-core/per-hardware-thread utilization (from `/proc/stat`)
-- **Docker containers** — inventory, state, status, health, live CPU % and memory
+- **Docker containers** — every `docker ps` field (ID, image, command, created, status, ports, name, labels) plus live CPU % and memory
 - **Web dashboard** — served at `http://localhost:1010`
 
 ## Quickstart

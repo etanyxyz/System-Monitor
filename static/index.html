@@ -67,20 +67,25 @@
     <section class="panel">
       <h2>Containers <span id="container-count" class="sub"></span></h2>
       <div id="docker-error" class="error" hidden></div>
-      <table id="containers-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Image</th>
-            <th>State</th>
-            <th>Health</th>
-            <th>Uptime</th>
-            <th>CPU</th>
-            <th>Memory</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="containers-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Image</th>
+              <th>Command</th>
+              <th>Created</th>
+              <th>Status</th>
+              <th>Ports</th>
+              <th>Name</th>
+              <th>Labels</th>
+              <th>CPU</th>
+              <th>Memory</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
   </main>
 

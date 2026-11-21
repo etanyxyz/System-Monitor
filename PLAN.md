@@ -41,9 +41,10 @@ The monitor gets host data two ways:
   - **Timeline**: system CPU % and RAM % over time with 5 min / 15 min / 1 hour windows, plus a per-container CPU % chart; client-side history capped at 2400 points (~1 h at 1.5 s pushes)
   - **Per-core CPU**: live chart, one series per core/hardware thread, color-coded green/yellow/red
   - **RAM breakdown**: stacked used/cached/buffers/free bar plus swap totals
-  - **Containers table**: name, image, state badge, health, uptime, live CPU % and memory used/limit
+  - **Containers table**: all `docker ps` columns — ID, Image, Command, Created (relative time), Status (docker-style, e.g. "Up 3 hours (healthy)"), Ports, Name, Labels — plus live CPU % and memory used/limit
 - Consumes the WebSocket (push every ~1.5 s); falls back to polling `/api/system` + `/api/containers` every 3 s if the socket drops
-- Static assets are served `no-cache` so a long-open tab can't run stale frontend code (this caused a "blank" view before); `Referrer-Policy: no-referrer` keeps any `?token=` out of Referer headers
+- Static assets are served `no-cache` so a long-open tab never runs stale frontend code; `Referrer-Policy: no-referrer` keeps any `?token=` out of Referer headers
+- Container fields come from two daemon calls per pass: `GET /containers/json` (the `docker ps` data: Status, Ports, Command, Labels) plus one inspect per container for state/exit code; live CPU/memory come from a non-streaming `stats` call per running container (thread-pooled, capped at 25)
 - When auth is enabled the page is opened as `?token=<secret>` and that value is attached to every fetch and the WebSocket URL (JS can't set headers on WS handshakes)
 
 ### 3. Docker packaging (hardened)

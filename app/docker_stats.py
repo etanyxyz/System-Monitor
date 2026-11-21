@@ -1,13 +1,15 @@
 """Docker container inventory and stats via the Engine API.
 
-Requires access to the Docker socket (mounted by docker-compose.yml).
-Degrades gracefully: when the socket is unavailable, get_containers()
+Reaches the daemon through DOCKER_HOST (a read-only socket-proxy in the
+shipped compose file; a mounted /var/run/docker.sock also works).
+Degrades gracefully: when the daemon is unavailable, get_containers()
 returns {"error": msg} instead of raising.
 """
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import docker
 from docker.errors import DockerException
@@ -73,6 +75,31 @@ def _memory_from_stats(after: dict) -> tuple[float, float]:
     return usage, limit
 
 
+def _command_from_attrs(attrs: dict) -> str:
+    """Container command the way `docker ps` shows it."""
+    cmd = (attrs.get("Config") or {}).get("Cmd") or attrs.get("Args") or []
+    return " ".join(cmd)
+
+
+def _ports_from_attrs(attrs: dict) -> str:
+    """Port mappings the way `docker ps` shows them (e.g. 0.0.0.0:1010->1010/tcp)."""
+    parts = []
+    for p in attrs.get("Ports") or []:
+        priv = p.get("PrivatePort")
+        if not priv:
+            continue
+        pub = p.get("PublicPort")
+        proto = p.get("Type", "tcp")
+        ip = p.get("IP") or ""
+        if ip and ":" in ip:  # bracket IPv6, docker-style
+            ip = f"[{ip}]"
+        if pub:
+            parts.append(f"{ip}:{pub}->{priv}/{proto}" if ip else f"{pub}->{priv}/{proto}")
+        else:
+            parts.append(f"{ip}:{priv}/{proto}" if ip else f"{priv}/{proto}")
+    return ", ".join(parts)
+
+
 def get_containers() -> dict:
     """Return {"containers": [...]} or {"error": msg}.
 
@@ -82,6 +109,10 @@ def get_containers() -> dict:
     try:
         client = _get_client()
         containers = client.containers.list(all=True)
+        # Raw list endpoint (the one `docker ps` is built from): provides
+        # the human-readable Status, Ports and Command strings that the
+        # inspect responses (behind containers.list) don't carry.
+        ps_rows = {r["Id"]: r for r in client.api.containers(all=True)}
     except (ConnectionError, DockerException) as exc:
         return {"error": str(exc)}
 
@@ -100,16 +131,24 @@ def get_containers() -> dict:
 
     result = []
     for c in containers:
+        ps_row = ps_rows.get(c.id, {})
         state = c.attrs.get("State", {})
         health = (state.get("Health") or {}).get("Status")
         entry = {
             "id": c.short_id,
             "name": c.name,
             "image": image_tag(c.attrs.get("Image")),
+            # formatted the way `docker ps` shows it
+            "command": ps_row.get("Command") or _command_from_attrs(c.attrs),
             "state": state.get("Status"),  # running/exited/paused/created/dead
-            "status": c.status,  # e.g. "Up 3 hours"
+            # docker-ps-style status, e.g. "Up 3 hours (healthy)";
+            # falls back to the raw state word if absent
+            "status": ps_row.get("Status") or c.status,
             "health": health,  # healthy/unhealthy/starting, or None
             "created": c.attrs.get("Created"),
+            "ports": _ports_from_attrs(ps_row),
+            "labels": (c.attrs.get("Config") or {}).get("Labels")
+            or ps_row.get("Labels") or {},
             "exit_code": state.get("ExitCode"),
             "cpu_percent": None,
             "memory_usage_bytes": None,
