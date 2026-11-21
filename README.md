@@ -17,8 +17,9 @@ Open <http://localhost:8080>.
 
 ### Dashboard
 
-- **CPU / Memory cards** — overall utilization with a live CPU sparkline and a
-  used/cached/buffers/free RAM bar
+- **CPU / Memory cards** — overall utilization with live sparklines
+- **Timeline** — CPU and RAM utilization over time (5 min / 15 min / 1 hour
+  windows) plus a per-container CPU chart
 - **CPU by core** — per-core (per hardware thread) utilization, color-coded
   green/yellow/red
 - **Memory breakdown** — stacked used/cached/buffers/free bar plus swap totals
@@ -26,7 +27,8 @@ Open <http://localhost:8080>.
   memory used/limit
 
 Data arrives over a WebSocket (1.5 s pushes, container stats every ~6 s); the
-page falls back to HTTP polling if the socket connection drops.
+page falls back to HTTP polling if the socket connection drops. Static assets
+are served with `no-cache` so a refreshed page always runs the latest frontend.
 
 ## How it works
 

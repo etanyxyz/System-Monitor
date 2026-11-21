@@ -46,6 +46,10 @@ function usageColor(p) {
   return "#f85149";
 }
 
+function timeLabel(t) {
+  return new Date(t).toLocaleTimeString([], { hour12: false });
+}
+
 // ---------------------------------------------------------------------------
 // charts
 // ---------------------------------------------------------------------------
@@ -54,28 +58,33 @@ Chart.defaults.color = "#8b949e";
 Chart.defaults.borderColor = "#30363d";
 Chart.defaults.font.family = "system-ui, -apple-system, sans-serif";
 
-const cpuSpark = new Chart($("cpu-spark"), {
-  type: "line",
-  data: {
-    labels: [],
-    datasets: [{
-      data: [],
-      borderColor: "#58a6ff",
-      backgroundColor: "rgba(88, 166, 255, 0.15)",
-      fill: true,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    }],
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: false,
-    plugins: { legend: { display: false }, tooltip: { enabled: false } },
-    scales: { x: { display: false }, y: { display: false, min: 0, max: 100 } },
-  },
-});
+function sparkline(id, color) {
+  return new Chart($(id), {
+    type: "line",
+    data: {
+      labels: [],
+      datasets: [{
+        data: [],
+        borderColor: color,
+        backgroundColor: color + "26", // ~15% alpha
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: { x: { display: false }, y: { display: false, min: 0, max: 100 } },
+    },
+  });
+}
+
+const cpuSpark = sparkline("cpu-spark", "#58a6ff");
+const ramSpark = sparkline("ram-spark", "#8957e5");
 
 const coreChart = new Chart($("core-chart"), {
   type: "bar",
@@ -130,23 +139,119 @@ const memChart = new Chart($("mem-chart"), {
   },
 });
 
+const sysTimeline = new Chart($("sys-timeline"), {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: "CPU",
+        data: [],
+        borderColor: "#58a6ff",
+        backgroundColor: "rgba(88, 166, 255, 0.12)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+      {
+        label: "RAM",
+        data: [],
+        borderColor: "#8957e5",
+        backgroundColor: "rgba(137, 87, 229, 0.10)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { position: "top", labels: { boxWidth: 12 } },
+      tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${c.parsed.y}%` } },
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+      y: { min: 0, max: 100, ticks: { callback: (v) => v + "%" } },
+    },
+  },
+});
+
+const contTimeline = new Chart($("cont-timeline"), {
+  type: "line",
+  data: { labels: [], datasets: [] },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { position: "bottom", labels: { boxWidth: 12 } },
+      tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${c.parsed.y}%` } },
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+      y: { min: 0, max: 100, ticks: { callback: (v) => v + "%" } },
+    },
+  },
+});
+
 // ---------------------------------------------------------------------------
-// rendering
+// history + rendering
 // ---------------------------------------------------------------------------
 
-const HISTORY_MAX = 120; // ~3 minutes at 1.5s pushes
+const HISTORY_MAX = 2400; // ~1 hour at 1.5 s pushes
 const history = [];
+let rangeSec = 300; // selected timeline window (seconds)
+
+const CONTAINER_PALETTE = [
+  "#58a6ff", "#3fb950", "#d29922", "#f85149", "#8957e5",
+  "#39c5cf", "#ff7b72", "#db61a2", "#7ee787", "#a5a6ff",
+  "#f0883e", "#56d364",
+];
+const containerColors = new Map();
+
+function colorFor(name) {
+  if (!containerColors.has(name)) {
+    containerColors.set(
+      name,
+      CONTAINER_PALETTE[containerColors.size % CONTAINER_PALETTE.length]
+    );
+  }
+  return containerColors.get(name);
+}
 
 function onSnapshot({ system, containers }) {
   if (system) updateSystem(system);
-  if (containers) updateTable(containers);
+  if (containers) {
+    updateTable(containers);
+    if (!containers.error && history.length > 0) {
+      // attach this sample's per-container CPU to the latest history entry
+      const entry = history[history.length - 1];
+      entry.cont = {};
+      for (const c of containers.containers) {
+        if (c.cpu_percent != null) entry.cont[c.name] = c.cpu_percent;
+      }
+    }
+  }
+  if (system) renderTimeline();
 }
 
 function updateSystem(system) {
   const cpu = system.cpu.overall_percent;
   const ram = system.memory.percent;
 
-  history.push({ cpu, ram });
+  history.push({
+    t: (system.timestamp || Date.now() / 1000) * 1000,
+    cpu,
+    ram,
+    cores: system.cpu.per_core_percent,
+  });
   if (history.length > HISTORY_MAX) history.shift();
 
   $("cpu-overall").textContent = cpu.toFixed(1) + "%";
@@ -158,18 +263,15 @@ function updateSystem(system) {
   $("cores-count").textContent = system.cpu.cores + " cores";
 
   const m = system.memory;
-  $("ram-used-txt").textContent = humanBytes(m.used_bytes);
-  $("ram-cached-txt").textContent = humanBytes(m.cached_bytes);
-  $("ram-buffers-txt").textContent = humanBytes(m.buffers_bytes);
-  $("ram-free-txt").textContent = humanBytes(m.free_bytes);
-  $("ram-bar-used").style.flexGrow = m.used_bytes;
-  $("ram-bar-cached").style.flexGrow = m.cached_bytes;
-  $("ram-bar-buffers").style.flexGrow = m.buffers_bytes;
-  $("ram-bar-free").style.flexGrow = m.free_bytes;
+  $("swap-sub").textContent = `swap ${humanBytes(m.swap_used_bytes)} / ${humanBytes(m.swap_total_bytes)}`;
 
-  cpuSpark.data.labels = history.map(() => "");
+  const labels = history.map(() => "");
+  cpuSpark.data.labels = labels;
   cpuSpark.data.datasets[0].data = history.map((h) => h.cpu);
   cpuSpark.update("none");
+  ramSpark.data.labels = labels;
+  ramSpark.data.datasets[0].data = history.map((h) => h.ram);
+  ramSpark.update("none");
 
   const cores = system.cpu.per_core_percent;
   coreChart.data.labels = cores.map((_, i) => "cpu" + i);
@@ -182,8 +284,6 @@ function updateSystem(system) {
   memChart.data.datasets[2].data = [m.buffers_bytes];
   memChart.data.datasets[3].data = [m.free_bytes];
   memChart.update("none");
-
-  $("swap-sub").textContent = `swap ${humanBytes(m.swap_used_bytes)} / ${humanBytes(m.swap_total_bytes)}`;
 }
 
 const STATE_CLASS = {
@@ -233,6 +333,55 @@ function updateTable(payload) {
   $("containers-table").tbody.innerHTML = list.map(rowHtml).join("");
 }
 
+// keep at most `max` points (uniform stride, always include the newest)
+function downsample(pts, max) {
+  if (pts.length <= max) return pts;
+  const step = Math.ceil(pts.length / max);
+  const out = [];
+  for (let i = 0; i < pts.length; i += step) out.push(pts[i]);
+  if (out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+  return out;
+}
+
+function renderTimeline() {
+  if (history.length === 0) return;
+  const cutoff = history[history.length - 1].t - rangeSec * 1000;
+  const pts = history.filter((h) => h.t >= cutoff);
+
+  const shown = downsample(pts, 240);
+  sysTimeline.data.labels = shown.map((h) => timeLabel(h.t));
+  sysTimeline.data.datasets[0].data = shown.map((h) => h.cpu);
+  sysTimeline.data.datasets[1].data = shown.map((h) => h.ram);
+  sysTimeline.update("none");
+
+  const cpts = pts.filter((h) => h.cont);
+  const cshown = downsample(cpts, 120);
+  const names = new Set();
+  for (const h of cpts) for (const n of Object.keys(h.cont)) names.add(n);
+  contTimeline.data.labels = cshown.map((h) => timeLabel(h.t));
+  contTimeline.data.datasets = [...names].map((name) => ({
+    label: name,
+    data: cshown.map((h) => (h.cont && h.cont[name] != null ? h.cont[name] : null)),
+    borderColor: colorFor(name),
+    backgroundColor: colorFor(name),
+    pointRadius: 0,
+    borderWidth: 1.5,
+    tension: 0.3,
+    spanGaps: true,
+  }));
+  contTimeline.update("none");
+}
+
+// timeline range picker
+for (const btn of document.querySelectorAll(".range-btn")) {
+  btn.addEventListener("click", () => {
+    for (const b of document.querySelectorAll(".range-btn")) b.classList.remove("active");
+    btn.classList.add("active");
+    rangeSec = Number(btn.dataset.range);
+    renderTimeline();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // live data: websocket with polling fallback
 // ---------------------------------------------------------------------------
@@ -255,8 +404,8 @@ function startPolling() {
         fetch("/api/containers").then((r) => (r.ok ? r.json() : { error: "HTTP " + r.status })),
       ]);
       onSnapshot({ system: s, containers: c });
-    } catch {
-      // keep polling; status dot already shows "reconnecting"
+    } catch (e) {
+      console.error("poll error:", e);
     }
   }, 3000);
 }
@@ -277,8 +426,8 @@ function connect() {
   ws.onmessage = (e) => {
     try {
       onSnapshot(JSON.parse(e.data));
-    } catch {
-      // ignore malformed frames
+    } catch (err) {
+      console.error("snapshot render error:", err);
     }
   };
   ws.onclose = () => {

@@ -13,10 +13,24 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 
 from . import docker_stats, system_metrics
 
 app = FastAPI(title="Resource Monitor", version="0.1.0")
+
+
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    """Never let browsers cache the dashboard assets.
+
+    A tab that stays open keeps running whatever app.js it first loaded;
+    stale caches of the dashboard JS have caused "blank" views before.
+    """
+    response = await call_next(request)
+    if not request.url.path.startswith(("/api", "/ws")):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 PUSH_INTERVAL = 1.5  # seconds between websocket pushes
 CONTAINER_REFRESH_EVERY = 4  # container stats are slower; refresh every Nth push

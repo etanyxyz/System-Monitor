@@ -34,19 +34,22 @@
           <span class="label">Memory</span>
           <span id="ram-overall" class="big">–</span>
         </div>
-        <div id="ram-bar" class="hbar">
-          <div id="ram-bar-used"></div>
-          <div id="ram-bar-cached"></div>
-          <div id="ram-bar-buffers"></div>
-          <div id="ram-bar-free"></div>
-        </div>
-        <div class="hbar-legend">
-          <span><i class="sw used"></i><b id="ram-used-txt">–</b></span>
-          <span><i class="sw cached"></i><b id="ram-cached-txt">–</b></span>
-          <span><i class="sw buffers"></i><b id="ram-buffers-txt">–</b></span>
-          <span><i class="sw free"></i><b id="ram-free-txt">–</b></span>
+        <div class="spark"><canvas id="ram-spark"></canvas></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Timeline</h2>
+        <div class="ranges">
+          <button class="range-btn active" data-range="300">5 min</button>
+          <button class="range-btn" data-range="900">15 min</button>
+          <button class="range-btn" data-range="3600">1 hour</button>
         </div>
       </div>
+      <div class="chart-wrap"><canvas id="sys-timeline"></canvas></div>
+      <h3 class="panel-sub">Per-container CPU</h3>
+      <div class="chart-wrap"><canvas id="cont-timeline"></canvas></div>
     </section>
 
     <section class="panel">
@@ -67,7 +70,7 @@
           <tr>
             <th>Name</th>
             <th>Image</th>
-            <th>Status</th>
+            <th>State</th>
             <th>Health</th>
             <th>Uptime</th>
             <th>CPU</th>
