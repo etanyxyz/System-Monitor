@@ -15,8 +15,18 @@ docker compose up --build
 
 Open <http://localhost:8080>.
 
-> **Note:** the dashboard is currently a scaffold preview (live JSON feed).
-> The full visual dashboard is in progress — see [PLAN.md](PLAN.md).
+### Dashboard
+
+- **CPU / Memory cards** — overall utilization with a live CPU sparkline and a
+  used/cached/buffers/free RAM bar
+- **CPU by core** — per-core (per hardware thread) utilization, color-coded
+  green/yellow/red
+- **Memory breakdown** — stacked used/cached/buffers/free bar plus swap totals
+- **Containers** — name, image, state badge, health, uptime, live CPU % and
+  memory used/limit
+
+Data arrives over a WebSocket (1.5 s pushes, container stats every ~6 s); the
+page falls back to HTTP polling if the socket connection drops.
 
 ## How it works
 

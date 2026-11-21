@@ -62,6 +62,8 @@ def get_system() -> dict:
             "used_bytes": mem.used,
             "free_bytes": mem.free,
             "available_bytes": mem.available,
+            "cached_bytes": mem.cached,
+            "buffers_bytes": mem.buffers,
             "percent": mem.percent,
             "swap_total_bytes": swap.total,
             "swap_used_bytes": swap.used,

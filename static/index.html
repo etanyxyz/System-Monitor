@@ -8,13 +8,78 @@
 </head>
 <body>
   <header>
-    <h1>Resource Monitor</h1>
-    <span id="status">connecting&hellip;</span>
+    <div class="title">
+      <h1>Resource Monitor</h1>
+      <span id="conn-status" class="dot" title="live"></span>
+    </div>
+    <div class="meta">
+      <span id="uptime">—</span>
+      <span id="load">—</span>
+      <span id="cores-count">—</span>
+    </div>
   </header>
+
   <main>
-    <p class="note">Scaffold preview &mdash; live snapshot feed. The full dashboard lands next.</p>
-    <pre id="data">waiting for data&hellip;</pre>
+    <section class="cards">
+      <div class="card">
+        <div class="card-head">
+          <span class="label">CPU</span>
+          <span id="cpu-overall" class="big">–</span>
+        </div>
+        <div class="spark"><canvas id="cpu-spark"></canvas></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="label">Memory</span>
+          <span id="ram-overall" class="big">–</span>
+        </div>
+        <div id="ram-bar" class="hbar">
+          <div id="ram-bar-used"></div>
+          <div id="ram-bar-cached"></div>
+          <div id="ram-bar-buffers"></div>
+          <div id="ram-bar-free"></div>
+        </div>
+        <div class="hbar-legend">
+          <span><i class="sw used"></i><b id="ram-used-txt">–</b></span>
+          <span><i class="sw cached"></i><b id="ram-cached-txt">–</b></span>
+          <span><i class="sw buffers"></i><b id="ram-buffers-txt">–</b></span>
+          <span><i class="sw free"></i><b id="ram-free-txt">–</b></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>CPU by core</h2>
+      <div class="chart-wrap"><canvas id="core-chart"></canvas></div>
+    </section>
+
+    <section class="panel">
+      <h2>Memory breakdown <span id="swap-sub" class="sub"></span></h2>
+      <div class="chart-wrap short"><canvas id="mem-chart"></canvas></div>
+    </section>
+
+    <section class="panel">
+      <h2>Containers <span id="container-count" class="sub"></span></h2>
+      <div id="docker-error" class="error" hidden></div>
+      <table id="containers-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Image</th>
+            <th>Status</th>
+            <th>Health</th>
+            <th>Uptime</th>
+            <th>CPU</th>
+            <th>Memory</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
   </main>
+
+  <script src="vendor/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
