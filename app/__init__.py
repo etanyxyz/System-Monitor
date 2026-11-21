@@ -1,0 +1,1 @@
+"""Resource Monitor application package."""
