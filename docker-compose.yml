@@ -4,91 +4,24 @@ services:
     container_name: resource-monitor
     ports:
       - "1010:1010"
-    environment:
-      # Talk to the Docker daemon through the read-only proxy below — the
-      # host socket itself is never mounted into this container.
-      - DOCKER_HOST=tcp://socket-proxy:2375
-      # Optional: require this token on every request (API, WS, static).
-      # When set, open the dashboard as http://host:1010/?token=<same value>.
-      # - MONITOR_TOKEN=change-me
-    depends_on:
-      - socket-proxy
+    # No environment variables. Optional bearer auth: add
+    # `environment: [MONITOR_TOKEN=change-me]` to require a token on every
+    # request (open the dashboard as http://host:1010/?token=<same value>).
+    volumes:
+      # The Docker Engine socket, mounted read-only. The app's in-process
+      # gateway (app/docker_gateway.py) only issues hard-coded GET endpoints
+      # (containers, images, version, ping), so the monitor can list
+      # containers and read stats but cannot create, start, stop, kill, exec,
+      # build, or otherwise mutate anything on the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Join the host's docker group so the non-root app process may reach the
+    # (group-owned) socket. 985 is this host's docker GID — set it to
+    # `getent group docker`'s GID if you deploy elsewhere.
+    group_add:
+      - "985"
     read_only: true
     tmpfs:
       - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
-
-  # Read-only gateway in front of the host Docker socket. Only
-  # GET /_ping, /version, /containers/* and /images/* are allowed
-  # (POST=0 forces GET/HEAD only); every other endpoint is rejected.
-  # Never expose its port — it is only reachable on this compose network.
-  socket-proxy:
-    image: lscr.io/linuxserver/socket-proxy@sha256:6beb1743581ec3b2ed1a2bafd617e8c7a1d7ae2fe835293e333327618fc2b925 # latest as of 2026-11-21
-    container_name: docker-socket-proxy
-    environment:
-      # what the monitor needs
-      - PING=1
-      - VERSION=1
-      - CONTAINERS=1
-      - IMAGES=1
-      # everything else off, and read-only
-      - ALLOW_ARCHIVE=0
-      - ALLOW_CHANGES=0
-      - ALLOW_EXPORT=0
-      - ALLOW_LOGS=0
-      - ALLOW_PAUSE=0
-      - ALLOW_RESTARTS=0
-      - ALLOW_STOP=0
-      - ALLOW_START=0
-      - ALLOW_TOP=0
-      - ALLOW_UNPAUSE=0
-      - AUTH=0
-      - BUILD=0
-      - COMMIT=0
-      - CONFIGS=0
-      - DISABLE_IPV6=0
-      - DISTRIBUTION=0
-      - EVENTS=0
-      - EXEC=0
-      - INFO=0
-      - LOG_LEVEL=info
-      - NETWORKS=0
-      - NODES=0
-      - PLUGINS=0
-      - POST=0
-      - SECRETS=0
-      - SERVICES=0
-      - SESSION=0
-      - SWARM=0
-      - SYSTEM=0
-      - TASKS=0
-      - TIMEOUT_CLIENT=10
-      - TIMEOUT_SERVER=10
-      - VOLUMES=0
-      - LIBPOD_CONTAINERS=0
-      - LIBPOD_EVENTS=0
-      - LIBPOD_EXEC=0
-      - LIBPOD_GENERATE=0
-      - LIBPOD_IMAGES=0
-      - LIBPOD_INFO=0
-      - LIBPOD_MANIFESTS=0
-      - LIBPOD_NETWORKS=0
-      - LIBPOD_PING=1
-      - LIBPOD_PLAY=0
-      - LIBPOD_PODS=0
-      - LIBPOD_SECRETS=0
-      - LIBPOD_SYSTEM=0
-      - LIBPOD_VERSION=1
-      - LIBPOD_VOLUMES=0
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    read_only: true
-    tmpfs:
-      - /run
     cap_drop:
       - ALL
     security_opt:

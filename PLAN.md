@@ -2,25 +2,26 @@
 
 ## Architecture overview
 
-A compose stack of two Docker containers on a private compose network:
+A single Docker container on the host:
 
-- **monitor** — a container running a **FastAPI** (Python) backend + a **static single-page frontend**, exposing one HTTP port (`1010`).
-- **socket-proxy** — a digest-pinned `lscr.io/linuxserver/socket-proxy` sidecar that fronts the host Docker socket with a read-only, endpoint-restricted view. It is never exposed to the outside.
+- **monitor** — a container running a **FastAPI** (Python) backend + a **static single-page frontend**, exposing one HTTP port (`1010`). It includes an **in-process read-only gateway** (`app/docker_gateway.py`) that speaks the Docker Engine API directly over the read-only-mounted host socket — the socket-proxy sidecar has been folded into this container.
 
 The monitor gets host data two ways:
 
 1. **Host CPU/RAM** — read from `/proc/stat` and `/proc/meminfo`. These files are host-wide (not PID-namespace scoped), so a plain container can read host stats with **no privileged mode and no extra mounts**. `psutil` wraps this.
-2. **Docker containers** — query the Docker Engine API via the `docker` Python SDK through the **read-only socket proxy** (`DOCKER_HOST=tcp://socket-proxy:2375`). The proxy mounts `/var/run/docker.sock` (ro) and allows only `GET /_ping`, `/version`, `/containers/*`, `/images/*` (`POST=0`); the monitor container never sees the socket itself.
+2. **Docker containers** — the Engine API via the in-process gateway. It connects to `/var/run/docker.sock` (mounted `:ro`) with raw HTTP/1.1 over the unix socket (stdlib `socket`, no docker-py) and is hard-coded to issue only `GET /_ping`, `/version`, `/containers/json`, `/containers/{id}/json`, `/containers/{id}/stats`, `/images/{ref}/json` — the same read-only allow-list the socket-proxy sidecar used to enforce. Nothing else can be requested.
 
 ## Requirements coverage
 
 | Requirement | How it's met |
 |---|---|
-| Runs inside Docker | `docker-compose.yml` stack: hardened `monitor` container (built from `Dockerfile`) + `socket-proxy` sidecar |
+| Runs inside Docker | Single hardened `monitor` container (built from `Dockerfile`) via `docker-compose.yml` |
+| One container only | The socket-proxy sidecar is replaced by the in-process gateway (`app/docker_gateway.py`); no third-party proxy image, no `DOCKER_HOST` |
 | Monitor system RAM usage | `/proc/meminfo` via `psutil` (total/used/free/available/swap) |
 | Monitor CPU usage across threads | Per-core/per-hardware-thread usage from `/proc/stat` deltas, plus overall % and load averages |
-| View Docker containers + status | Docker Engine API via read-only socket proxy (no mutation possible) |
+| View Docker containers + status | Docker Engine API via the in-process read-only gateway (no mutation possible) |
 | Visual web dashboard | Static SPA (plain JS + Chart.js) served by FastAPI, live updates via WebSocket |
+| No environment variables | The shipped compose file sets none; `MONITOR_TOKEN` (optional bearer auth) is the only supported env var and is off by default |
 
 ## Components
 
@@ -29,10 +30,18 @@ The monitor gets host data two ways:
   - **RAM**: total / used / free / available / cached / buffers / swap + usage % (from `/proc/meminfo`)
   - **CPU per thread/core**: per-core usage % for `cpu0..cpuN` (sampled from `/proc/stat` deltas — each hardware core/thread), plus overall %, load averages, uptime
 - `GET /api/containers` — name, image, state (running/exited/paused/…), status, health, uptime, per-container CPU % and memory used/limit
-  - Per-container CPU %: one **non-streaming** `stats` call per container — the daemon samples for ~1 s internally and returns both `precpu_stats` and `cpu_stats`, so a single call yields a real short-window %. Calls run **concurrently** across containers (`ThreadPoolExecutor`, max 8 workers), so a pass takes ~1 s total regardless of container count (capped at 25 sampled).
+  - Per-container CPU %: one **non-streaming** `stats` call per running container — the daemon samples for ~1 s internally and returns both `precpu_stats` and `cpu_stats`, so a single call yields a real short-window %. Calls run **concurrently** (`ThreadPoolExecutor`, max 8 workers), so a pass takes ~1 s total (capped at 25 sampled containers).
+  - `exit_code` for non-running containers comes from one inspect each (`/containers/{id}/json`); running containers need no inspect.
 - `WS /ws` — pushes a full system snapshot every ~1.5 s so the dashboard is live without hammering the API; container stats ride along every 4th push (~6 s) since they're the slower path
-- **Optional auth** — `MONITOR_TOKEN` env var (off by default); when set, every HTTP route (API + static) and the WebSocket handshake require the token via `Authorization: Bearer` or `?token=` (constant-time comparison); the WS denial happens at the handshake itself (no data ever flows)
-- Graceful degradation: if the proxy/daemon is unreachable, system metrics still work and the containers API returns a clear 503 error
+- **Optional auth** — `MONITOR_TOKEN` env var (off by default, not set in the shipped compose file); when set, every HTTP route (API + static) and the WebSocket handshake require the token via `Authorization: Bearer` or `?token=` (constant-time comparison); the WS denial happens at the handshake itself (no data ever flows)
+- Graceful degradation: if the daemon is unreachable, system metrics still work and the containers API returns a clear 503 error; the WS feed keeps pushing and reports the failure in the payload
+
+### 1b. In-process read-only gateway (`app/docker_gateway.py`)
+- Raw HTTP/1.1 over the unix socket (stdlib `socket`): request, header parse, chunked/gzip body decode, 10 s timeout
+- Hard-coded GET-only allow-list enforced **before** any byte is sent:
+  `/_ping`, `/version`, `/containers/json`, `/containers/{id}/json`, `/containers/{id}/stats`, `/images/{ref}/json` (image refs: name[:tag], domain[:port]/name[:tag], @sha256 digest, bare digest)
+- Non-2xx daemon responses and connect failures raise `GatewayError`, which `docker_stats` turns into `{"error": …}`
+- Replaces docker-py + the socket-proxy sidecar: `requirements.txt` is down to `fastapi`, `uvicorn[standard]`, `psutil`
 
 ### 2. Frontend (static SPA, no build server needed)
 - Plain JS + **Chart.js** (vendored) served from the FastAPI app (keeps the image single-stage and dependency-light)
@@ -44,41 +53,39 @@ The monitor gets host data two ways:
   - **Containers table**: all `docker ps` columns — ID, Image, Command, Created (relative time), Status (docker-style, e.g. "Up 3 hours (healthy)"), Ports, Name, Labels — plus live CPU % and memory used/limit
 - Consumes the WebSocket (push every ~1.5 s); falls back to polling `/api/system` + `/api/containers` every 3 s if the socket drops
 - Static assets are served `no-cache` so a long-open tab never runs stale frontend code; `Referrer-Policy: no-referrer` keeps any `?token=` out of Referer headers
-- Container fields come from two daemon calls per pass: `GET /containers/json` (the `docker ps` data: Status, Ports, Command, Labels) plus one inspect per container for state/exit code; live CPU/memory come from a non-streaming `stats` call per running container (thread-pooled, capped at 25)
+- Container fields come from `GET /containers/json` (the `docker ps` data: Status, Ports, Command, Labels) through the gateway, plus one inspect per *exited* container for the exit code; live CPU/memory from a non-streaming `stats` call per running container (thread-pooled, capped at 25)
 - When auth is enabled the page is opened as `?token=<secret>` and that value is attached to every fetch and the WebSocket URL (JS can't set headers on WS handshakes)
 
-### 3. Docker packaging (hardened)
-- **Dockerfile**: `python:3.12-slim` **pinned by digest** → install pinned `fastapi uvicorn[standard] psutil docker` → `COPY` app + static frontend → `USER monitor` (non-root) → uvicorn on `0.0.0.0:1010`
-- **docker-compose.yml** — two services:
+### 3. Docker packaging (hardened, single container)
+- **Dockerfile**: `python:3.12-slim` **pinned by digest** → install pinned `fastapi uvicorn[standard] psutil` → `COPY` app + static frontend → `USER monitor` (non-root) → uvicorn on `0.0.0.0:1010`
+- **docker-compose.yml** — one service, zero environment variables:
   ```yaml
   services:
     monitor:
       build: .
       ports: ["1010:1010"]
-      environment: [DOCKER_HOST=tcp://socket-proxy:2375]
+      # optional auth, off by default:
+      # environment: [MONITOR_TOKEN=change-me]
+      volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+      group_add: ["985"]   # host docker GID (getent group docker)
       read_only: true
       tmpfs: ["/tmp"]
       cap_drop: [ALL]
       security_opt: ["no-new-privileges:true"]
       restart: unless-stopped
-    socket-proxy:   # lscr.io/linuxserver/socket-proxy, digest-pinned
-      environment: [PING=1, VERSION=1, CONTAINERS=1, IMAGES=1, POST=0, ...all else 0]
-      volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
-      read_only: true
-      tmpfs: ["/run"]
-      cap_drop: [ALL]
-      security_opt: ["no-new-privileges:true"]
-      restart: unless-stopped
   ```
-- Runs as **non-root**; the docker socket is only mounted (ro) into the proxy, which enforces a read-only, endpoint-restricted view of the daemon. Both containers run `read_only` with all capabilities dropped. Optional `MONITOR_TOKEN` bearer auth for all requests.
-- Verified end-to-end: mutation endpoints (`POST/DELETE /containers*`, `/build`, `/exec`, …) return 403 through the proxy while the reads the app needs return 200.
+- Runs as **non-root**; the socket is mounted read-only into the container, and the in-process gateway restricts it to the hard-coded read endpoints. `group_add` grants the non-root user group access to the socket.
+- Trade-off (documented in the README): the dashboard container now holds the read-only socket itself. The allow-list + `:ro` + all other hardening remain, but a full compromise of the app process could open its own socket connection — previously contained by the separate proxy container.
+- Verified end-to-end: disallowed endpoints (`/containers`, `/info`, `/images/…/changes`, `/containers/x/kill`, …) are rejected by the gateway before any byte is sent, while the reads the app needs return 200.
 
 ### 4. README
-- Quickstart (`docker compose up --build`) noting the repo ships the compose file + `Dockerfile` and the image is built from source; what each panel shows; **Security** section (read-only proxy, non-root, read-only FS, dropped caps, digest pinning, optional token auth, port published on all interfaces); troubleshooting (proxy/503, 401, host CPU visibility)
+- Quickstart (`docker compose up --build`) noting the repo ships the compose file + `Dockerfile` and the image is built from source; what each panel shows; **Security** section (in-process read-only gateway, read-only socket mount, non-root, read-only FS, dropped caps, digest pinning, optional token auth, port published on all interfaces, single-container trade-off); troubleshooting (503/permission-denied, 401, host CPU visibility)
 
 ## Assumptions
 1. **"CPU usage across threads"** = per-core/per-hardware-thread utilization (from `/proc/stat`), plus per-container CPU. True per-process-thread sampling isn't visible from inside a container (PID namespace isolation) unless run with `--pid=host`, a security trade-off that could be added later as an optional profile.
 2. **Stack**: Python/FastAPI for simplicity; frontend is plain JS + Chart.js (no build step).
+3. **Single container** (user decision): the socket-proxy sidecar is folded in as the in-process gateway; the container mounts the host socket read-only. The allow-list is defense-in-depth against accidental mutation, not a boundary against a fully compromised app process — stated honestly in the README.
+4. **`MONITOR_TOKEN` survives** (user decision): it is the one remaining env var, optional and off by default, not set in the shipped compose file.
 
 ## Build order
 1. Project scaffold (`Dockerfile`, `docker-compose.yml`, `app/`, `static/`)
@@ -87,6 +94,7 @@ The monitor gets host data two ways:
 4. WebSocket push
 5. Frontend dashboard
 6. `docker compose up` + verify all panels against a live host
+7. Socket-proxy integration: in-process gateway, `docker_stats` rewrite, single-service compose, docs, full QA (allow-list rejection, degraded/recovery cycles)
 
 ## Git
 - Remote: `git@github.com:etanyxyz/System-Monitor.git`

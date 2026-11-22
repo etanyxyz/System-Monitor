@@ -1,7 +1,8 @@
-"""Docker container inventory and stats via the Engine API.
+"""Docker container inventory and stats.
 
-Reaches the daemon through DOCKER_HOST (a read-only socket-proxy in the
-shipped compose file; a mounted /var/run/docker.sock also works).
+Talks to the Engine API through the in-process read-only gateway
+(`app.docker_gateway`), which fronts the mounted read-only
+/var/run/docker.sock and only permits a hard-coded set of GET endpoints.
 Degrades gracefully: when the daemon is unavailable, get_containers()
 returns {"error": msg} instead of raising.
 """
@@ -9,13 +10,10 @@ returns {"error": msg} instead of raising.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 
-import docker
-from docker.errors import DockerException
-from requests.exceptions import RequestException
+from . import docker_gateway as gw
+from .docker_gateway import GatewayError
 
-_client: docker.DockerClient | None = None
 _image_tags: dict[str, str] = {}
 
 # How many running containers to sample per pass, and how many stats
@@ -24,27 +22,6 @@ _image_tags: dict[str, str] = {}
 # both precpu_stats and cpu_stats, so one call per container suffices.
 _MAX_SAMPLED = 25
 _MAX_WORKERS = 8
-
-
-def _get_client() -> docker.DockerClient:
-    """Return a live Docker client, or raise ConnectionError."""
-    global _client
-    if _client is not None:
-        try:
-            _client.ping()
-            return _client
-        # docker-py leaks connection-level failures as
-        # requests.exceptions.ConnectionError (not a DockerException),
-        # so catch request errors too — otherwise a dead daemon strands
-        # a stale client here and every call below raises uncaught.
-        except (DockerException, RequestException, OSError):
-            _client = None
-    try:
-        _client = docker.from_env()  # honors DOCKER_HOST, else unix socket
-        _client.ping()
-        return _client
-    except (DockerException, RequestException, OSError) as exc:
-        raise ConnectionError(f"cannot reach Docker daemon: {exc}") from exc
 
 
 def _cpu_percent_from_stats(stats: dict) -> float:
@@ -80,16 +57,10 @@ def _memory_from_stats(after: dict) -> tuple[float, float]:
     return usage, limit
 
 
-def _command_from_attrs(attrs: dict) -> str:
-    """Container command the way `docker ps` shows it."""
-    cmd = (attrs.get("Config") or {}).get("Cmd") or attrs.get("Args") or []
-    return " ".join(cmd)
-
-
-def _ports_from_attrs(attrs: dict) -> str:
+def _ports_from_row(row: dict) -> str:
     """Port mappings the way `docker ps` shows them (e.g. 0.0.0.0:1010->1010/tcp)."""
     parts = []
-    for p in attrs.get("Ports") or []:
+    for p in row.get("Ports") or []:
         priv = p.get("PrivatePort")
         if not priv:
             continue
@@ -105,22 +76,23 @@ def _ports_from_attrs(attrs: dict) -> str:
     return ", ".join(parts)
 
 
+def _health_from_row(row: dict) -> str | None:
+    """Health status, or None when the container has no healthcheck."""
+    health = (row.get("Health") or {}).get("Status")
+    return None if health in (None, "none") else health
+
+
 def get_containers() -> dict:
     """Return {"containers": [...]} or {"error": msg}.
 
     Live CPU % and memory figures are sampled only for running
-    containers (capped at _MAX_SAMPLED per pass).
+    containers (capped at _MAX_SAMPLED per pass). The `docker ps` fields
+    come from the single /containers/json list call; only exited
+    containers need an extra inspect, to recover the exit code.
     """
     try:
-        client = _get_client()
-        containers = client.containers.list(all=True)
-        # Raw list endpoint (the one `docker ps` is built from): provides
-        # the human-readable Status, Ports and Command strings that the
-        # inspect responses (behind containers.list) don't carry.
-        ps_rows = {r["Id"]: r for r in client.api.containers(all=True)}
-    except (ConnectionError, DockerException, RequestException) as exc:
-        # covers a daemon that dies mid-pass (requests-level errors) as
-        # well as the ConnectionError raised by _get_client()
+        rows = gw.list_containers()
+    except GatewayError as exc:
         return {"error": str(exc)}
 
     def image_tag(ref: str | None) -> str | None:
@@ -130,56 +102,64 @@ def get_containers() -> dict:
         if ref in _image_tags:
             return _image_tags[ref]
         try:
-            tags = client.images.get(ref).tags
+            tags = (gw.inspect_image(ref) or {}).get("RepoTags") or []
             _image_tags[ref] = tags[0] if tags else ref
-        except DockerException:
+        except GatewayError:
             _image_tags[ref] = ref
         return _image_tags[ref]
 
     result = []
-    for c in containers:
-        ps_row = ps_rows.get(c.id, {})
-        state = c.attrs.get("State", {})
-        health = (state.get("Health") or {}).get("Status")
+    running_ids: list[str] = []
+    for row in rows:
+        cid = row.get("Id") or ""
+        state = row.get("State") or ""  # running/exited/paused/created/dead
         entry = {
-            "id": c.short_id,
-            "name": c.name,
-            "image": image_tag(c.attrs.get("Image")),
+            "id": cid[:12],
+            "name": (row.get("Names") or ["/"])[0].lstrip("/"),
+            "image": image_tag(row.get("Image")),
             # formatted the way `docker ps` shows it
-            "command": ps_row.get("Command") or _command_from_attrs(c.attrs),
-            "state": state.get("Status"),  # running/exited/paused/created/dead
+            "command": row.get("Command") or "",
+            "state": state,
             # docker-ps-style status, e.g. "Up 3 hours (healthy)";
             # falls back to the raw state word if absent
-            "status": ps_row.get("Status") or c.status,
-            "health": health,  # healthy/unhealthy/starting, or None
-            "created": c.attrs.get("Created"),
-            "ports": _ports_from_attrs(ps_row),
-            "labels": (c.attrs.get("Config") or {}).get("Labels")
-            or ps_row.get("Labels") or {},
-            "exit_code": state.get("ExitCode"),
+            "status": row.get("Status") or state or "unknown",
+            "health": _health_from_row(row),
+            "created": row.get("Created"),
+            "ports": _ports_from_row(row),
+            "labels": row.get("Labels") or {},
+            "exit_code": None,
             "cpu_percent": None,
             "memory_usage_bytes": None,
             "memory_limit_bytes": None,
             "memory_percent": None,
         }
         result.append(entry)
+        if state.lower().startswith("running"):
+            running_ids.append(cid)
+        else:
+            # The exit code lives only in the full inspect (State.ExitCode);
+            # non-running containers are few, so one inspect each is cheap.
+            try:
+                entry["exit_code"] = (gw.inspect_container(cid) or {}).get("State", {}).get(
+                    "ExitCode"
+                )
+            except GatewayError:
+                pass
 
-    running = [c for c in containers if c.status.lower().startswith("running")][
-        :_MAX_SAMPLED
-    ]
+    running_ids = running_ids[:_MAX_SAMPLED]
 
-    def _fetch_stats(c):
+    def _fetch_stats(cid: str):
         try:
-            return c.short_id, c.stats(stream=False)
-        except DockerException:
-            return c.short_id, None
+            return cid, gw.container_stats(cid)
+        except GatewayError:
+            return cid, None
 
     # Each stats call takes ~1s on the daemon, so run them concurrently;
     # a pass is ~1s total instead of ~1s per container.
-    if running:
-        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(running))) as pool:
-            for cid, stats in pool.map(_fetch_stats, running):
-                entry = next((r for r in result if r["id"] == cid), None)
+    if running_ids:
+        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(running_ids))) as pool:
+            for cid, stats in pool.map(_fetch_stats, running_ids):
+                entry = next((r for r in result if r["id"] == cid[:12]), None)
                 if entry is None or stats is None:
                     continue
                 entry["cpu_percent"] = round(_cpu_percent_from_stats(stats), 1)
