@@ -9,21 +9,46 @@ Containerized resource monitor with a live web dashboard:
 
 ## Quickstart
 
-The repo ships a hardened `docker-compose.yml` (single container) and a
-`Dockerfile`; the image is built from source on first run:
+The monitor ships as a single Docker image, `etanyxyz/system-monitor`, and
+deploys as a single hardened container via compose:
 
 ```bash
-docker compose up --build
+cat > docker-compose.yml <<'EOF'
+services:
+  monitor:
+    image: etanyxyz/system-monitor:latest
+    container_name: resource-monitor
+    ports:
+      - "1010:1010"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    group_add:
+      - "985"   # host docker GID — set to `getent group docker`'s GID
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+EOF
+docker compose up -d
 ```
 
 Open <http://localhost:1010>.
 
 The container mounts the host Docker socket read-only. The app runs as the
 non-root `monitor` user, so it joins the host's `docker` group at start
-(`group_add` in the compose file — `985` on this host; set it to the GID
-from `getent group docker` elsewhere). No environment variables are set:
+(`group_add` — `985` in the example above; set it to the GID from
+`getent group docker` on your host). No environment variables are set:
 the only optional one is `MONITOR_TOKEN` (see Security), which you add to
 the compose file yourself if you want bearer auth.
+
+To build the image from source instead of pulling it, run
+`docker build -t etanyxyz/system-monitor:latest .` in this repo (the
+repo's own `docker-compose.yml` does exactly that plus deployment in one
+step: `docker compose up --build`).
 
 ### Dashboard
 
