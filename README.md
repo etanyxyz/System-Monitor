@@ -10,10 +10,9 @@ Containerized resource monitor with a live web dashboard:
 ## Quickstart
 
 The monitor ships as a single Docker image, `etanyxyz/system-monitor`, and
-deploys as a single hardened container via compose:
+deploys as a single hardened container via this compose file:
 
-```bash
-cat > docker-compose.yml <<'EOF'
+```yaml
 services:
   monitor:
     image: etanyxyz/system-monitor:latest
@@ -32,8 +31,6 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
-EOF
-docker compose up -d
 ```
 
 Open <http://localhost:1010>.
