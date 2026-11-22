@@ -83,10 +83,11 @@ The monitor gets host data two ways:
 ### 4. README
 - Quickstart (`docker compose up --build`) noting the repo ships the compose file + `Dockerfile` and the image is built from source; what each panel shows; **Security** section (in-process read-only gateway, read-only socket mount, non-root, read-only FS, dropped caps, digest pinning, optional token auth, port published on all interfaces, single-container trade-off); troubleshooting (503/permission-denied, 401, host CPU visibility); **Home Assistant** section (integration + card install, entities, options)
 
-### 5. Home Assistant integration (`custom_components/resource_monitor/`)
+### 5. Home Assistant integration (separate repo: `etanyxyz/System-Monitor-HA-Integration`)
 Marketplace/HACS-ready custom integration that turns the monitor API into HA
 sensors. Domain `resource_monitor` (the built-in `system_monitor` already owns
-that name).
+that name). It lives in its own repository because the Marketplace allows one
+category per repo; this repo keeps only the app + docs.
 
 - **Config flow** (`config_flow.py`): URL + optional token + poll interval.
   URL is normalized (scheme assumed, trailing `/` stripped) and doubles as the
@@ -117,9 +118,10 @@ that name).
   "homeassistant": "2026.11.0"}`), `manifest.json` v0.1.0, `translations/en.json`
   alongside `strings.json`.
 
-### 6. Lovelace card (separate repo: `etanyxyz/System-Monitor-Card`)
+### 6. Lovelace card (separate repo: `etanyxyz/System-Monitor-HA-Card`)
 Marketplace requires one category per repository, so the card is its own
-plugin repo rather than a folder in this one.
+plugin repo (`etanyxyz/System-Monitor-HA-Card`) rather than a folder in this
+one.
 
 - Single dependency-free `resource-monitor-card.js` at the repo root (plain
   shadow DOM, no imports, no build step) + root `hacs.json` with
@@ -164,7 +166,10 @@ plugin repo rather than a folder in this one.
 8. Home Assistant: CORS middleware, custom integration (config flow, coordinator, sensors, branding, HACS packaging), separate Lovelace card repo, docs + QA
 
 ## Git
-- Integration/monitor remote: `git@github.com:etanyxyz/System-Monitor.git`
-- Card remote: `git@github.com:etanyxyz/System-Monitor-Card.git` (own repo,
-  local checkout at `/mnt/docker/lab/System-Monitor-Card`)
+- Monitor app: `git@github.com:etanyxyz/System-Monitor.git` (this repo)
+- Integration: `git@github.com:etanyxyz/System-Monitor-HA-Integration.git`
+  (local checkout `/mnt/docker/lab/System-Monitor-HA-Integration`; tags like
+  `v0.1.0` drive a GitHub release workflow)
+- Card: `git@github.com:etanyxyz/System-Monitor-HA-Card.git`
+  (local checkout `/mnt/docker/lab/System-Monitor-HA-Card`)
 - Commits via SSH key

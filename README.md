@@ -6,7 +6,7 @@ Containerized resource monitor with a live web dashboard:
 - **CPU usage across threads** — per-core/per-hardware-thread utilization (from `/proc/stat`)
 - **Docker containers** — every `docker ps` field (ID, image, command, created, status, ports, name, labels) plus live CPU % and memory
 - **Web dashboard** — served at `http://localhost:1010`
-- **Home Assistant** — optional custom integration (sensors) and a Lovelace card, both installable through HACS
+- **Home Assistant** — companion integration (sensors) and Lovelace card, both installable through the Marketplace/HACS
 
 ## Quickstart
 
@@ -65,15 +65,23 @@ are served with `no-cache` so a refreshed page always runs the latest frontend.
 
 ## Home Assistant
 
-The monitor ships a custom integration (`custom_components/resource_monitor`)
-and pairs with a standalone Lovelace card. Both are optional; the dashboard
-above keeps working on its own.
+Home Assistant support lives in two companion repositories, both optional; the
+dashboard above keeps working on its own:
+
+| Repository | Category | What it is |
+|---|---|---|
+| [System-Monitor-HA-Integration](https://github.com/etanyxyz/System-Monitor-HA-Integration) | Integration | Native sensors for this API |
+| [System-Monitor-HA-Card](https://github.com/etanyxyz/System-Monitor-HA-Card) | Dashboard | Lovelace card |
+
+The Marketplace allows one category per repository, which is why they are
+split.
 
 ### Integration: sensors
 
-1. HACS → three-dot menu → **Custom repositories**
-2. Add `https://github.com/etanyxyz/System-Monitor` with category **Integration**
-3. Install **System Monitor**, then restart Home Assistant
+1. Add `https://github.com/etanyxyz/System-Monitor-HA-Integration` as a
+   custom repository (Marketplace repositories or HACS → **Custom
+   repositories**), category **Integration**
+2. Install **System Monitor**, then restart Home Assistant
 4. Settings → Devices & services → **Add integration** → **System Monitor**
    - **Monitor URL** — e.g. `http://192.168.1.50:1010` (the scheme is assumed
      to be `http://` if you omit it)
@@ -110,7 +118,7 @@ container sensors keep their last values (an error is logged).
 The card lives in its own repository so each can be published to the
 Marketplace under its own category:
 
-- **Card**: <https://github.com/etanyxyz/System-Monitor-Card> (category
+- **Card**: <https://github.com/etanyxyz/System-Monitor-HA-Card> (category
   **Dashboard**)
 
 ```yaml
