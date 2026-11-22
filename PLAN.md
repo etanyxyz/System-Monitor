@@ -136,7 +136,7 @@ one.
 - CORS in `app/main.py` (read-only `GET`/`OPTIONS`, all origins; preflights
   exempt from the token gate) is what makes this possible.
 
-### 7. Verification performed
+### 7. Verification performed (local + live Home Assistant 2026.11.2)
 - Integration modules executed against the live monitor under a stubbed HA
   package: polling, payload parsing, all sensor values/devices, authed and
   unauthed flows (401 → reauth), `?token=` fallback, unreachable monitor →
@@ -148,6 +148,22 @@ one.
 - Container rebuilt; verified CORS headers, preflight `200`, `401` without
   token, `200` with bearer/`?token=`, and graceful `503` when the Docker
   socket is unavailable.
+- Marketplace (built-in, 2026.11): added both custom repositories, installed
+  the integration and the card from their releases; the card resource was
+  registered automatically as
+  `/local/community/System-Monitor-HA-Card/resource-monitor-card.js?v=<repo>-<ver>`.
+- Config flow against the live monitor (`http://192.168.1.105:1010`) created
+  35 entities: 13 system + 12 per-core + 5 per container for 2 containers,
+  with one monitor device and per-container child devices linked via
+  `via_device_id`.
+- Duplicate setup aborts with `already_configured`; the options flow changed
+  the interval to 5 s, reloaded the entry and persisted `options`.
+- Dashed dashboard "System Monitor" created (sections view): custom card plus
+  integration sensor tiles; screenshotted in light and dark mode, live data
+  rendering and the v0.1.1 card resource loading.
+- CI on both companion repos: hassfest + HACS validation + compile/JS checks
+  green for the integration; card HACS validation only flags the missing
+  repository description (a GitHub setting, not code).
 
 ## Assumptions
 1. **"CPU usage across threads"** = per-core/per-hardware-thread utilization (from `/proc/stat`), plus per-container CPU. True per-process-thread sampling isn't visible from inside a container (PID namespace isolation) unless run with `--pid=host`, a security trade-off that could be added later as an optional profile.

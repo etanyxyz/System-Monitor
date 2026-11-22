@@ -76,6 +76,8 @@ dashboard above keeps working on its own:
 The Marketplace allows one category per repository, which is why they are
 split.
 
+![Resource Monitor Card in a dashboard](https://raw.githubusercontent.com/etanyxyz/System-Monitor-HA-Card/main/images/preview.png)
+
 ### Integration: sensors
 
 1. Add `https://github.com/etanyxyz/System-Monitor-HA-Integration` as a
