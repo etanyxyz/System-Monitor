@@ -6,6 +6,7 @@ Containerized resource monitor with a live web dashboard:
 - **CPU usage across threads** — per-core/per-hardware-thread utilization (from `/proc/stat`)
 - **Docker containers** — every `docker ps` field (ID, image, command, created, status, ports, name, labels) plus live CPU % and memory
 - **Web dashboard** — served at `http://localhost:1010`
+- **Home Assistant** — optional custom integration (sensors) and a Lovelace card, both installable through HACS
 
 ## Quickstart
 
@@ -62,6 +63,74 @@ Data arrives over a WebSocket (1.5 s pushes, container stats every ~6 s); the
 page falls back to HTTP polling if the socket connection drops. Static assets
 are served with `no-cache` so a refreshed page always runs the latest frontend.
 
+## Home Assistant
+
+The monitor ships a custom integration (`custom_components/resource_monitor`)
+and pairs with a standalone Lovelace card. Both are optional; the dashboard
+above keeps working on its own.
+
+### Integration: sensors
+
+1. HACS → three-dot menu → **Custom repositories**
+2. Add `https://github.com/etanyxyz/System-Monitor` with category **Integration**
+3. Install **System Monitor**, then restart Home Assistant
+4. Settings → Devices & services → **Add integration** → **System Monitor**
+   - **Monitor URL** — e.g. `http://192.168.1.50:1010` (the scheme is assumed
+     to be `http://` if you omit it)
+   - **Token** — only if `MONITOR_TOKEN` is set on the monitor
+   - **Poll interval** — seconds, minimum 2, default 10
+
+One device is created per monitor URL (named `System Monitor (<host>)`) with:
+
+| Entity | Unit / device class |
+|---|---|
+| CPU usage | % |
+| CPU core 1…N | % (created/removed as the core count changes) |
+| Load average (1m / 5m / 15m) | — |
+| Memory total / used / available | data size |
+| Memory used percentage | % |
+| Swap total / used | data size |
+| Swap used percentage | % |
+| Uptime | s |
+| Boot time | timestamp |
+
+Each Docker container becomes its own device (linked to the monitor device via
+`via_device`) with **CPU usage**, **Memory usage**, **Memory used percentage**,
+**Memory limit** and **Status**. Containers that disappear are removed
+automatically; stopped containers report `unknown` for the stats-only sensors.
+
+Token and poll interval can be changed later via the integration's
+**Configure** button. If the monitor rejects the token, Home Assistant starts a
+re-authentication flow instead of failing silently. If Docker is unreachable
+but the host metrics still work, the system sensors keep updating and the
+container sensors keep their last values (an error is logged).
+
+### Card: Lovelace dashboard
+
+The card lives in its own repository so each can be published to the
+Marketplace under its own category:
+
+- **Card**: <https://github.com/etanyxyz/System-Monitor-Card> (category
+  **Dashboard**)
+
+```yaml
+type: custom:resource-monitor-card
+url: http://192.168.1.50:1010
+token: optional-monitor-token
+interval: 10
+title: Homelab
+max_containers: 8
+```
+
+The card has a visual editor and polls `/api/system` + `/api/containers`
+directly from your browser. That requires the monitor to answer CORS
+requests, which it does for read-only `GET` requests (see Security) — the
+token middleware still gates every request when `MONITOR_TOKEN` is set.
+
+> **Card shows a CORS or network error?** The monitor container must run a
+> build that includes the CORS middleware (0.1.0+). Rebuild and restart it
+> with `docker compose up -d --build`.
+
 ## How it works
 
 The monitor is a single Docker container running FastAPI + Uvicorn:
@@ -85,6 +154,11 @@ The monitor is a single Docker container running FastAPI + Uvicorn:
 | `GET /api/containers` | Container list with state, status, health, live CPU % and memory |
 | `WS /ws` | Pushes a snapshot every ~1.5 s (containers refreshed every ~6 s) |
 
+CORS is enabled for `GET`/`OPTIONS` on all origins so that browser-based
+dashboards (the Home Assistant card) can poll the API cross-origin. CORS does
+not expose anything new: there are no mutating endpoints, and `MONITOR_TOKEN`
+still guards every request.
+
 ## Security
 
 The container is hardened so a compromise of the dashboard can't touch your
@@ -99,6 +173,7 @@ Docker daemon or host:
 | No capabilities | `cap_drop: ALL` + `no-new-privileges`. |
 | Pinned image | Base image pinned by digest; Python deps pinned exactly in `requirements.txt`. |
 | Optional auth | Add `environment: [MONITOR_TOKEN=<secret>]` to require a token on every request (API, WebSocket, static files). Open the dashboard as `http://host:1010/?token=<secret>`. Off by default. |
+| Read-only CORS | Cross-origin `GET`/`OPTIONS` is allowed so the Home Assistant card can poll the API. No mutating endpoint exists, the token middleware still runs on every real request (only credential-less CORS preflights pass through it), and enabling CORS adds no write surface. |
 
 Honest trade-off of the single-container design: the container that serves
 the dashboard also holds the (read-only) Docker socket. The in-process

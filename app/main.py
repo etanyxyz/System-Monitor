@@ -13,6 +13,7 @@ import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
@@ -21,6 +22,17 @@ from starlette.responses import Response
 from . import docker_stats, system_metrics
 
 app = FastAPI(title="Resource Monitor", version="0.1.0")
+
+# Read-only CORS so browser-based dashboards (e.g. the Home Assistant
+# custom card) can poll the API cross-origin. The token middleware below
+# still gates every non-preflight request when MONITOR_TOKEN is set;
+# no write endpoint is exposed by CORS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "OPTIONS"],
+    allow_headers=["Authorization"],
+)
 
 # Optional shared-secret auth. Set MONITOR_TOKEN in the environment to
 # require a token on every request; the dashboard is then opened as
@@ -59,7 +71,13 @@ async def no_cache_static(request: Request, call_next):
 
 @app.middleware("http")
 async def require_token(request: Request, call_next):
-    """Optional bearer-token auth for all HTTP routes (API + static)."""
+    """Optional bearer-token auth for all HTTP routes (API + static).
+
+    CORS preflights are let through: browsers send them without credentials,
+    and they expose no data (CORS answers them before the route runs).
+    """
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if MONITOR_TOKEN and not _authorized(request.headers, request.query_params):
         return JSONResponse({"error": "unauthorized: missing or bad token"}, status_code=401)
     return await call_next(request)

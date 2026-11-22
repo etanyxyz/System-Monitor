@@ -22,6 +22,8 @@ The monitor gets host data two ways:
 | View Docker containers + status | Docker Engine API via the in-process read-only gateway (no mutation possible) |
 | Visual web dashboard | Static SPA (plain JS + Chart.js) served by FastAPI, live updates via WebSocket |
 | No environment variables | The shipped compose file sets none; `MONITOR_TOKEN` (optional bearer auth) is the only supported env var and is off by default |
+| Home Assistant sensors | Custom integration (`custom_components/resource_monitor`) installable via HACS/Marketplace: config flow, coordinator, system/per-core/container sensors |
+| Aesthetic dashboard card | Separate Lovelace plugin repo (`System-Monitor-Card`): CPU ring, memory bars, container rows, visual editor |
 
 ## Components
 
@@ -79,7 +81,71 @@ The monitor gets host data two ways:
 - Verified end-to-end: disallowed endpoints (`/containers`, `/info`, `/images/…/changes`, `/containers/x/kill`, …) are rejected by the gateway before any byte is sent, while the reads the app needs return 200.
 
 ### 4. README
-- Quickstart (`docker compose up --build`) noting the repo ships the compose file + `Dockerfile` and the image is built from source; what each panel shows; **Security** section (in-process read-only gateway, read-only socket mount, non-root, read-only FS, dropped caps, digest pinning, optional token auth, port published on all interfaces, single-container trade-off); troubleshooting (503/permission-denied, 401, host CPU visibility)
+- Quickstart (`docker compose up --build`) noting the repo ships the compose file + `Dockerfile` and the image is built from source; what each panel shows; **Security** section (in-process read-only gateway, read-only socket mount, non-root, read-only FS, dropped caps, digest pinning, optional token auth, port published on all interfaces, single-container trade-off); troubleshooting (503/permission-denied, 401, host CPU visibility); **Home Assistant** section (integration + card install, entities, options)
+
+### 5. Home Assistant integration (`custom_components/resource_monitor/`)
+Marketplace/HACS-ready custom integration that turns the monitor API into HA
+sensors. Domain `resource_monitor` (the built-in `system_monitor` already owns
+that name).
+
+- **Config flow** (`config_flow.py`): URL + optional token + poll interval.
+  URL is normalized (scheme assumed, trailing `/` stripped) and doubles as the
+  unique ID, so the same monitor cannot be added twice. Validation GETs
+  `/api/system` and maps 401/403 to `invalid_auth`, network/URL failures to
+  `cannot_connect`. A **reauth** step handles a rotated `MONITOR_TOKEN`; an
+  **options flow** (`OptionsFlowWithReload`) edits token + interval without
+  re-adding the entry. URL is immutable on purpose — changing it would change
+  every entity's unique ID.
+- **Coordinator** (`coordinator.py`): `DataUpdateCoordinator` polling
+  `/api/system` + `/api/containers`; interval floored at 2 s (container stats
+  are expensive). Token sent as `Authorization: Bearer` first, retried with the
+  dashboard-compatible `?token=` when a proxy strips the header. 401/403 →
+  `ConfigEntryAuthFailed` (reauth), network/HTTP errors → `UpdateFailed`
+  (retry). Docker-only failures keep the last container snapshot and surface
+  the daemon error instead of flapping every sensor.
+- **Sensors** (`sensor.py`): one device per monitor (`System Monitor (<host>)`,
+  `configuration_url` set) with CPU %, load 1/5/15, memory total/used/
+  available/%, swap total/used/%, uptime and boot time (timestamp). Per-core
+  sensors track the live core count; every container becomes its own device
+  (`via_device` → monitor) with CPU %, memory used/%/limit and status.
+  Disappeared containers and cores are removed through `async_remove()`.
+  Dynamic refresh runs behind an `asyncio.Lock` from a synchronous listener
+  wrapper (the coordinator invokes listeners synchronously).
+- **Branding**: `brand/icon.png` inside the integration folder (HA serves
+  custom-integration brand images from there).
+- **Packaging**: root `hacs.json` (`{"name": "System Monitor",
+  "homeassistant": "2026.11.0"}`), `manifest.json` v0.1.0, `translations/en.json`
+  alongside `strings.json`.
+
+### 6. Lovelace card (separate repo: `etanyxyz/System-Monitor-Card`)
+Marketplace requires one category per repository, so the card is its own
+plugin repo rather than a folder in this one.
+
+- Single dependency-free `resource-monitor-card.js` at the repo root (plain
+  shadow DOM, no imports, no build step) + root `hacs.json` with
+  `filename: resource-monitor-card.js`.
+- Talks directly to `/api/system` + `/api/containers` with `fetch` (REST
+  polling, default 5 s), token as `?token=` and `Authorization: Bearer`.
+- UI: status dot + uptime/load header, CPU ring gauge, memory/swap bars,
+  full-width per-core bars, container rows with state badge and CPU/memory.
+  Container queries adapt the layout to narrow dashboard columns.
+- Card editor implementing `LovelaceGenericElementEditor` (`setConfig`,
+  `hass`, `config-changed` event) for a visual form instead of YAML.
+- CORS in `app/main.py` (read-only `GET`/`OPTIONS`, all origins; preflights
+  exempt from the token gate) is what makes this possible.
+
+### 7. Verification performed
+- Integration modules executed against the live monitor under a stubbed HA
+  package: polling, payload parsing, all sensor values/devices, authed and
+  unauthed flows (401 → reauth), `?token=` fallback, unreachable monitor →
+  `UpdateFailed`, container-vanish and core-count changes (adds/removals),
+  config-flow schema + URL normalization, options prefill.
+- Card smoke-tested in Node (rendering, config editor contract, error state,
+  token URL) and rendered in headless Chromium at 460/330/250 px widths and
+  against a token-protected monitor.
+- Container rebuilt; verified CORS headers, preflight `200`, `401` without
+  token, `200` with bearer/`?token=`, and graceful `503` when the Docker
+  socket is unavailable.
 
 ## Assumptions
 1. **"CPU usage across threads"** = per-core/per-hardware-thread utilization (from `/proc/stat`), plus per-container CPU. True per-process-thread sampling isn't visible from inside a container (PID namespace isolation) unless run with `--pid=host`, a security trade-off that could be added later as an optional profile.
@@ -95,7 +161,10 @@ The monitor gets host data two ways:
 5. Frontend dashboard
 6. `docker compose up` + verify all panels against a live host
 7. Socket-proxy integration: in-process gateway, `docker_stats` rewrite, single-service compose, docs, full QA (allow-list rejection, degraded/recovery cycles)
+8. Home Assistant: CORS middleware, custom integration (config flow, coordinator, sensors, branding, HACS packaging), separate Lovelace card repo, docs + QA
 
 ## Git
-- Remote: `git@github.com:etanyxyz/System-Monitor.git`
+- Integration/monitor remote: `git@github.com:etanyxyz/System-Monitor.git`
+- Card remote: `git@github.com:etanyxyz/System-Monitor-Card.git` (own repo,
+  local checkout at `/mnt/docker/lab/System-Monitor-Card`)
 - Commits via SSH key
